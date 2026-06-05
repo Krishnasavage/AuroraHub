@@ -1,47 +1,71 @@
-import os, json
+import os
+import psycopg2
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
-DB_FILE = 'database.json'
-BOT_SECRET = 'aurora-secret-2025'
+# Railway otomatis kasih variabel DATABASE_URL
+DB_URL = os.environ.get("DATABASE_URL")
 
-def load_db():
-    if not os.path.exists(DB_FILE): return {}
-    with open(DB_FILE, 'r') as f:
-        try: return json.load(f)
-        except: return {}
+def get_db():
+    return psycopg2.connect(DB_URL)
 
-def save_db(data):
-    with open(DB_FILE, 'w') as f: json.dump(data, f, indent=4)
+# Buat table pas pertama kali jalan
+def init_db():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS keys (
+            id SERIAL PRIMARY KEY,
+            key TEXT UNIQUE,
+            used BOOLEAN DEFAULT FALSE,
+            hwid TEXT,
+            device TEXT
+        )
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+
+init_db()
 
 @app.route('/api/keys', methods=['GET', 'POST', 'DELETE'])
 def handle_keys():
-    if request.headers.get('x-bot-secret') != BOT_SECRET: return jsonify({'success': False}), 401
-    db = load_db()
-    
+    if request.headers.get('x-bot-secret') != 'aurora-secret-2025': return jsonify({'success': False}), 401
+    conn = get_db()
+    cur = conn.cursor()
+
     if request.method == 'POST':
-        db[request.json['key']] = {'used': False, 'hwid': None, 'device': 'Unknown'}
-        save_db(db)
+        key = request.json['key']
+        cur.execute("INSERT INTO keys (key) VALUES (%s)", (key,))
+        conn.commit()
         return jsonify({'success': True})
-    
+
     if request.method == 'DELETE':
         key = request.args.get('key')
-        if key in db: del db[key]; save_db(db); return jsonify({'success': True})
-        return jsonify({'success': False}), 404
-        
-    return jsonify({'success': True, 'data': [{'key': k, **v} for k, v in db.items()]})
+        cur.execute("DELETE FROM keys WHERE key = %s", (key,))
+        conn.commit()
+        return jsonify({'success': True})
+
+    cur.execute("SELECT key, used, hwid, device FROM keys")
+    rows = cur.fetchall()
+    return jsonify({'success': True, 'data': [{'key': r[0], 'used': r[1], 'hwid': r[2], 'device': r[3]} for r in rows]})
 
 @app.route('/api/redeem', methods=['POST'])
 def redeem():
     data = request.json
-    db = load_db()
-    key = data.get('key')
-    if key not in db: return jsonify({'success': False, 'message': 'Invalid Key'})
-    if db[key]['hwid'] is None:
-        db[key].update({'hwid': data.get('hwid'), 'used': True, 'device': data.get('device', 'Unknown')})
-        save_db(db)
-        return jsonify({'success': True, 'message': 'Success'})
-    return jsonify({'success': False, 'message': 'HWID Mismatch'})
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT used, hwid FROM keys WHERE key = %s", (data['key'],))
+    row = cur.fetchone()
+    
+    if not row: return jsonify({'success': False, 'message': 'Invalid Key'})
+    
+    if row[1] is None:
+        cur.execute("UPDATE keys SET used=TRUE, hwid=%s, device=%s WHERE key=%s", (data['hwid'], data['device'], data['key']))
+        conn.commit()
+        return jsonify({'success': True})
+    
+    return jsonify({'success': True if row[1] == data['hwid'] else False})
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
