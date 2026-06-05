@@ -1,0 +1,4 @@
+flask
+gunicorn
+requests
+# Tambahkan library lain jika ada (misal: sqlite3/flask-sqlalchemy)
