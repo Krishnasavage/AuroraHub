@@ -1,4 +1,4 @@
+discord.py
 flask
-gunicorn
-requests
-# Tambahkan library lain jika ada (misal: sqlite3/flask-sqlalchemy)
+aiohttp
+python-dotenv
